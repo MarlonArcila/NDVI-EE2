@@ -1,0 +1,68 @@
+import ee
+import eemont, datetime 
+import geemap as gm
+import geemap.foliumap as gmf
+import geemap.colormaps as cm
+import geopandas as gpd
+import geojson
+from geojson import GeometryCollection, MultiPolygon, Feature, FeatureCollection
+import json
+import pandas as pd
+import numpy as np
+import seaborn as sns
+from matplotlib import pyplot as plt
+ee.Authenticate()
+ee.Initialize()
+gm.ee_initialize()
+gmf.ee_initialize()
+gdf = gpd.read_file('/home/hal/Downloads/predios_ayacucho.geojson')
+gdf = gdf.explode(column='geometry', ignore_index=True, index_parts=False)
+gdf = gdf.to_crs("EPSG:4326")
+gdf
+gdf_js = json.loads(gdf.to_json())
+gdf_js
+polygon = gdf_js ['features'][0]
+polygon
+polygon_ee = ee.FeatureCollection([polygon])
+polygon_ee
+StartDate = '2022-08-01'
+EndDate = '2022-12-31'
+L8 = (ee.ImageCollection('LANDSAT/LC08/C02/T1_L2')
+      .filterBounds(polygon_ee)
+      .maskClouds()
+      .filterDate(StartDate,EndDate)
+      .scaleAndOffset()
+      .spectralIndices(['EVI','GNDVI']))
+ts = L8.getTimeSeriesByRegions(collection = polygon_ee, bands = ['EVI','GNDVI'], reducer = [ee.Reducer.median()],scale = 5)
+ts
+tsPandas = gm.ee_to_df(ts)
+tsPandas.index = np.arange(1, len(tsPandas) + 1)
+tsPandas.index.rename('PIXEL', inplace=True)
+tsPandas.reset_index(level=0, inplace=True)
+tsPandas 
+tsPandas[tsPandas == -9999] = np.nan
+tsPandas
+tsPandas.rename(columns = {'EVI':'INDEX EVI', 'GNDVI':'INDEX GNDVI', 
+                              'reducer':'STATISTIC', 'date':'DATE', 'Nombre':'NOMBRE'}, inplace = True) 
+tsPandas
+tsPandas= pd.melt(tsPandas,id_vars=['NOMBRE','PIXEL','DATE','STATISTIC'], value_vars=['INDEX EVI','INDEX GNDVI'],  var_name = 'INDEX', value_name = 'VALUE')
+tsPandas
+tsPandas.dropna(how='any', inplace=True)
+tsPandas
+tsPandas['PIXEL'] = np.arange(1, len(tsPandas) + 1)
+tsPandas
+sns.set_theme(style="darkgrid")
+print('El indice GNDVI permite conocer la cantidad, calidad y desarrollo de la vegetacion en un terreno o poligono determinado, el analisis va desde -1 a 1, siendo en si es inferior o igual a 0 quiere decir ausencia de vegetacion porque hay es agua o suelo desnudo, los valores que son mayores a 0.3 demuestran que la vegetacion en el poligono analizado por pixel tiene alta calidad y desarrollo. El indice EVI soluciona problemas que puedan haber en el GNDVI por interferencias del suelo y atmosfericas, aplican los mismos valores para anlizarlo que en el GNDVI, solo que se concluye que la vegetacion es saludable si esta entre 0.2 y 0.8.') 
+sns_plot = sns.lineplot(data=tsPandas, x = 'DATE', y = 'VALUE',hue = 'INDEX')
+gndvi = L8.select("GNDVI")
+evi = L8.select("EVI")
+m = gmf.Map()
+url = 'https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}'
+m.add_tile_layer(url, name='Google Map', attribution='Google')
+m.center_object(polygon_ee, 13)
+m.addLayer(gndvi.median().clip(polygon_ee), {"min": 0.3, "max": 1, "palette": "ndvi"}, "GNDVI")
+m.addLayer(evi.median().clip(polygon_ee), {"min": 0.2, "max": 1, "palette":cm.palettes.ndvi}, "EVI")
+m 
+m.set_plot_options
+m.set_plot_options(add_marker_cluster=True, marker=None)
+m
